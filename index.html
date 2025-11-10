@@ -17,21 +17,19 @@
   button { padding:10px 16px; border:0; border-radius:12px; cursor:pointer; background:var(--brand); color:#fff; font-weight:600; }
   button.secondary{ background:#0f766e; }
   button[disabled]{ opacity:.5; cursor:not-allowed; }
-  .badge{ display:inline-block; padding:4px 8px; border-radius:999px; background:var(--chip); color:var(--sub); font-size:.8rem; }
-  .muted{ color:var(--sub); font-size:.9rem; }
-  .log { margin-top:12px; font-family:ui-monospace,Menlo,Consolas,monospace; background:#0b1020; color:#cbd5e1; padding:12px; border-radius:12px; white-space:pre-wrap; font-size:.85rem; display:none; }
+  .badge{ display:inline-block; padding:4px 8px; border-radius:999px; background:var(--chip); color:#334155; font-size:.8rem; }
+  .muted{ color:#334155; font-size:.9rem; }
+  .divider{ height:1px; background:#e5e7eb; margin:14px 0; }
   table { border-collapse:collapse; width:100%; margin-top:10px; }
   th,td{ border:1px solid #e5e7eb; padding:6px 8px; font-size:.9rem; }
   th{ background:#f1f5f9; text-align:left; }
-  .divider{ height:1px; background:#e5e7eb; margin:14px 0; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
     <h1>Zoro Tools Inventory Date Updater — Preview, then Download</h1>
-    <p>Automatically updates inventory dates and renames output as:<br>
-    <b>ZoroToolsInventoryUpload YYYY.MM.DD HH.mm am/pm.xlsx</b></p>
+    <p>Updates only <span class="badge">INVENTORY REFERENCE #</span> and <span class="badge">AVAILABLE TO SHIP DATE</span> (all sheets) to today’s local date in <b>YYYYMMDD</b>. No other columns are changed.</p>
 
     <div class="row" style="margin-top:8px">
       <input id="file" type="file" accept=".xlsx" />
@@ -46,133 +44,119 @@
       <button id="download" class="secondary" disabled>Download Updated .xlsx</button>
       <span id="outname" class="badge" title="Proposed download name" style="display:none;"></span>
     </div>
-
-    <div id="log" class="log"></div>
   </div>
 </div>
 
 <script>
 (function(){
+  // ---- Only these two columns will be updated (case-insensitive) ----
   const TARGET_HEADERS = {
     "inventory reference #": ["inventory reference #","inventory ref #","inventory reference number"],
-    "available to ship date": ["available to ship date","avail to ship date","ship available date"],
-    "reporting location number": ["reporting location number","reporting location #","reporting location"]
+    "available to ship date": ["available to ship date","avail to ship date","available-to-ship date","ship available date"]
   };
+  // SAFETY: we intentionally DO NOT list "reporting location number" here, so it stays untouched.
 
-  const byId = x => document.getElementById(x);
-  const fileInput  = byId('file');
-  const previewBtn = byId('preview');
-  const downloadBtn= byId('download');
-  const statusEl   = byId('status');
-  const summaryEl  = byId('summary');
-  const previewArea= byId('previewArea');
-  const outnameEl  = byId('outname');
-  const logEl      = byId('log');
+  // ---- DOM helpers ----
+  const $ = id => document.getElementById(id);
+  const fileInput=$('file'), previewBtn=$('preview'), downloadBtn=$('download');
+  const statusEl=$('status'), summaryEl=$('summary'), previewArea=$('previewArea'), outnameEl=$('outname');
 
-  const pad = n => String(n).padStart(2,'0');
-  function cellDateYYYYMMDD(){
-    const d = new Date();
-    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
-  }
-  function dateDots(){
-    const d = new Date();
-    return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())}`;
-  }
-  function time24hAmPm(){
-    const d = new Date();
-    let h = d.getHours();
-    const m = pad(d.getMinutes());
-    const ampm = h >= 12 ? 'pm' : 'am';
-    return `${pad(h)}.${m} ${ampm}`;
-  }
+  const pad=n=>String(n).padStart(2,'0');
+  function cellDateYYYYMMDD(){ const d=new Date(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`; }
+  function dateDots(){ const d=new Date(); return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())}`; }
+  function time24hAmPm(){ const d=new Date(); return `${pad(d.getHours())}.${pad(d.getMinutes())} ${d.getHours()>=12?'pm':'am'}`; }
 
-  function normalize(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g," "); }
+  function normalize(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g,' '); }
   function findHeaderIndexes(headerRow){
-    const map = {};
-    const NR = headerRow.map(h => normalize(h));
+    const map={}, norm = headerRow.map(h=>normalize(h));
     for (const canonical in TARGET_HEADERS){
-      const vars = TARGET_HEADERS[canonical].map(normalize);
-      let found = -1;
-      for (const v of vars){
-        const i = NR.indexOf(v);
-        if (i !== -1){ found = i; break; }
-      }
-      if (found !== -1) map[canonical] = found;
+      const variants = TARGET_HEADERS[canonical].map(normalize);
+      let found=-1;
+      for (const v of variants){ const i=norm.indexOf(v); if(i!==-1){ found=i; break; } }
+      if(found!==-1) map[canonical]=found;
     }
     return map;
   }
 
+  // ---- state ----
   let arrayBuffer=null, wbModified=null;
 
   fileInput.addEventListener('change', async (e)=>{
-    const f = e.target.files?.[0];
-    if(!f){ previewBtn.disabled=true; downloadBtn.disabled=true; statusEl.textContent="Waiting for file"; return; }
-    arrayBuffer = await f.arrayBuffer();
+    const f=e.target.files?.[0];
+    if(!f){ previewBtn.disabled=true; downloadBtn.disabled=true; statusEl.textContent='Waiting for file'; return; }
+    arrayBuffer=await f.arrayBuffer();
     statusEl.textContent=`Loaded: ${f.name}`;
-    summaryEl.textContent="";
-    previewArea.style.display="none";
-    outnameEl.style.display="none";
-    wbModified=null;
-    previewBtn.disabled=false;
-    downloadBtn.disabled=true;
+    wbModified=null; previewBtn.disabled=false; downloadBtn.disabled=true;
+    previewArea.style.display='none'; outnameEl.style.display='none'; summaryEl.textContent='';
   });
 
+  // ---- Preview (apply updates in-memory + show first 12 rows of first sheet) ----
   previewBtn.addEventListener('click', ()=>{
     if(!arrayBuffer) return;
 
-    const baseName = "ZoroToolsInventoryUpload"; // fixed root name
-    const finalName = `${baseName} ${dateDots()} ${time24hAmPm()}.xlsx`;
-    outnameEl.textContent = finalName;
-    outnameEl.style.display="inline-block";
+    const proposedName = `ZoroToolsInventoryUpload ${dateDots()} ${time24hAmPm()}.xlsx`;
+    outnameEl.textContent = proposedName;
+    outnameEl.style.display='inline-block';
 
-    const wb = XLSX.read(arrayBuffer,{type:"array"});
     const stamp = cellDateYYYYMMDD();
-    let totalRows=0, sheetsTouched=0, colsHit=new Set();
+    const wb = XLSX.read(arrayBuffer,{type:'array'});
+    let touched=0, rows=0, colsHit=new Set();
 
     wb.SheetNames.forEach(name=>{
       const ws=wb.Sheets[name];
-      const A=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      const A=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       if(!A.length) return;
-      const idx=findHeaderIndexes(A[0]);
-      const cols=Object.values(idx);
+
+      const idxMap = findHeaderIndexes(A[0]);
+      const cols = Object.values(idxMap);
       if(!cols.length) return;
-      for(const k in idx){colsHit.add(k);}
-      for(let r=1;r<A.length;r++){
-        for(const c of cols){A[r][c]=stamp;}
-        totalRows++;
+
+      for (const k in idxMap) colsHit.add(k);
+
+      for (let r=1;r<A.length;r++){
+        for (const c of cols) A[r][c]=stamp; // write only to the two target columns
+        rows++;
       }
-      const newWS=XLSX.utils.aoa_to_sheet(A);
-      for(let r=1;r<A.length;r++){
-        for(const c of cols){
+
+      const newWS = XLSX.utils.aoa_to_sheet(A);
+      for (let r=1;r<A.length;r++){
+        for (const c of cols){
           const addr=XLSX.utils.encode_cell({r,c});
           if(newWS[addr]) newWS[addr].t='s';
         }
       }
-      wb.Sheets[name]=newWS;
-      sheetsTouched++;
+      wb.Sheets[name]=newWS; touched++;
     });
 
-    wbModified=wb;
-    summaryEl.innerHTML=`Updated <b>${totalRows.toLocaleString()}</b> rows across <b>${sheetsTouched}</b> sheets.<br>Proposed name: <span class="badge">${finalName}</span>`;
-    statusEl.textContent="Preview ready";
-    downloadBtn.disabled=false;
+    wbModified = wb;
+    statusEl.textContent='Preview ready';
 
-    // preview first 12 rows
-    const ws=wb.Sheets[wb.SheetNames[0]];
-    const A=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
-    const max=Math.min(A.length,13);
-    let html=`<div class="divider"></div><div class="muted">Preview: <b>${wb.SheetNames[0]}</b> — first ${max-1} row(s)</div>`;
-    if(A.length){
-      html+=`<table><thead><tr>${A[0].map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${A.slice(1,max).map(r=>`<tr>${A[0].map((_,i)=>`<td>${r[i]??""}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-    } else { html+=`<div class="muted">Sheet empty.</div>`; }
-    previewArea.innerHTML=html;
-    previewArea.style.display="block";
+    summaryEl.innerHTML = `Updated <b>${rows.toLocaleString()}</b> rows across <b>${touched}</b> sheet(s). `
+      + `Columns hit: <span class="badge">${[...colsHit].join(', ') || 'none found'}</span><br>`
+      + `Proposed name: <span class="badge">${proposedName}</span>`;
+
+    // preview first sheet (first 12 rows)
+    const first = wb.SheetNames[0];
+    const ws0 = wb.Sheets[first];
+    const A0 = XLSX.utils.sheet_to_json(ws0,{header:1,defval:''});
+    const max = Math.min(A0.length,13);
+    let html = `<div class="divider"></div><div class="muted">Preview: <b>${first}</b> — first ${Math.max(0,max-1)} row(s)</div>`;
+    if(A0.length){
+      const head=A0[0];
+      html += `<table><thead><tr>${head.map(h=>`<th>${String(h||'')}</th>`).join('')}</tr></thead><tbody>${
+        A0.slice(1,max).map(row=>`<tr>${head.map((_,i)=>`<td>${String((row||[])[i]??'')}</td>`).join('')}</tr>`).join('')
+      }</tbody></table>`;
+    } else html += `<div class="muted">Sheet is empty.</div>`;
+    previewArea.innerHTML=html; previewArea.style.display='block';
+
+    downloadBtn.disabled=false;
   });
 
-  downloadBtn.addEventListener('click',()=>{
-    if(!wbModified){alert("Preview first.");return;}
-    const name=`ZoroToolsInventoryUpload ${dateDots()} ${time24hAmPm()}.xlsx`;
-    XLSX.writeFile(wbModified,name);
+  // ---- Download (recompute name at click time so timestamp is current) ----
+  downloadBtn.addEventListener('click', ()=>{
+    if(!wbModified){ alert('Please click Preview first.'); return; }
+    const finalName = `ZoroToolsInventoryUpload ${dateDots()} ${time24hAmPm()}.xlsx`;
+    XLSX.writeFile(wbModified, finalName);
   });
 })();
 </script>
