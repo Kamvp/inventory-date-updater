@@ -57,7 +57,7 @@
 
 <script>
 (function(){
-  // ---------- Config: header aliases (case-insensitive) ----------
+  // ---------- Headers to update (case-insensitive) ----------
   const TARGET_HEADERS = {
     "inventory reference #": ["inventory reference #","inventory ref #","inventory reference number"],
     "available to ship date": ["available to ship date","avail to ship date","ship available date"],
@@ -75,16 +75,23 @@
   const outnameEl  = byId('outname');
   const logEl      = byId('log');
 
-  function pad(n){ return String(n).padStart(2,'0'); }
-  function todayYYYYMMDD(){
+  const pad = n => String(n).padStart(2,'0');
+
+  // value written into cells (no dots; as requested earlier)
+  function cellDateYYYYMMDD(){
     const d = new Date();
     return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
   }
-  function timeHHmmAmPm(){
+  // filename parts: YYYY.MM.DD and HH.mm (24h)
+  function dateDots(){
     const d = new Date();
-    const h = d.getHours(); // 00–23
-    return `${pad(h)}.${pad(d.getMinutes())}${h>=12?'pm':'am'}`; // e.g., 14.28pm
+    return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())}`;
   }
+  function time24h(){
+    const d = new Date();
+    return `${pad(d.getHours())}.${pad(d.getMinutes())}`;
+  }
+
   function normalize(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g," "); }
   function findHeaderIndexes(headerRow){
     const map = {};
@@ -131,9 +138,8 @@
   previewBtn.addEventListener('click', () => {
     if(!arrayBuffer) return;
 
-    const stamp = todayYYYYMMDD();
-    const time  = timeHHmmAmPm();
-    proposedName = `${baseName} ${stamp} ${time}.xlsx`;
+    // build proposed name with dotted date + 24h time
+    proposedName = `${baseName} ${dateDots()} ${time24h()}.xlsx`;
     outnameEl.textContent = proposedName;
     outnameEl.style.display = "inline-block";
 
@@ -141,6 +147,7 @@
     const wb = XLSX.read(arrayBuffer, { type: "array" });
 
     let sheetsTouched = 0, rowsUpdated = 0, colsHit = new Set();
+    const stamp = cellDateYYYYMMDD();
 
     wb.SheetNames.forEach(sheetName => {
       const ws  = wb.Sheets[sheetName];
@@ -184,7 +191,7 @@
     const maxRows = Math.min(A0.length, 13); // header + 12 rows
 
     let html = `<div class="divider"></div>
-      <div class="muted">Preview: <b>${firstSheet}</b> — showing first ${maxRows-1 < 0 ? 0 : maxRows-1} row(s)</div>`;
+      <div class="muted">Preview: <b>${firstSheet}</b> — showing first ${Math.max(0,maxRows-1)} row(s)</div>`;
 
     if (A0.length){
       const head = A0[0];
@@ -207,7 +214,8 @@
   // ---------- Download ----------
   downloadBtn.addEventListener('click', () => {
     if(!wbModified){ alert("Please click Preview first."); return; }
-    if(!proposedName){ proposedName = `${baseName} ${todayYYYYMMDD()} ${timeHHmmAmPm()}.xlsx`; }
+    // re-evaluate name at click time, so time stays current if they waited
+    proposedName = `${baseName} ${dateDots()} ${time24h()}.xlsx`;
     XLSX.writeFile(wbModified, proposedName);
   });
 })();
