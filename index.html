@@ -3,12 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Inventory Date Updater (Preview → Download)</title>
+<title>Zoro Tools Inventory Date Updater (Preview → Download)</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root { --ink:#0f172a; --sub:#334155; --chip:#e2e8f0; --bg:#f8fafc; --card:#ffffff; --brand:#0ea5e9; }
-  html,body { height:100%; }
-  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--ink); }
+  html,body { height:100%; margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--ink); }
   .wrap { max-width:960px; margin:32px auto; padding:0 16px; }
   .card { background:var(--card); border-radius:16px; padding:24px; box-shadow:0 10px 30px rgba(2,6,23,.08); }
   h1 { font-size:1.3rem; margin:0 0 10px; }
@@ -30,12 +29,9 @@
 <body>
 <div class="wrap">
   <div class="card">
-    <h1>Inventory Date Updater — Preview, then Download</h1>
-    <p>Sets these columns (if present, across all sheets) to today’s local date in <b>YYYYMMDD</b>: 
-      <span class="badge">INVENTORY REFERENCE #</span>, 
-      <span class="badge">AVAILABLE TO SHIP DATE</span>, 
-      <span class="badge">REPORTING LOCATION NUMBER</span>.
-    </p>
+    <h1>Zoro Tools Inventory Date Updater — Preview, then Download</h1>
+    <p>Automatically updates inventory dates and renames output as:<br>
+    <b>ZoroToolsInventoryUpload YYYY.MM.DD HH.mm am/pm.xlsx</b></p>
 
     <div class="row" style="margin-top:8px">
       <input id="file" type="file" accept=".xlsx" />
@@ -57,14 +53,12 @@
 
 <script>
 (function(){
-  // ---------- Headers to update (case-insensitive) ----------
   const TARGET_HEADERS = {
     "inventory reference #": ["inventory reference #","inventory ref #","inventory reference number"],
     "available to ship date": ["available to ship date","avail to ship date","ship available date"],
     "reporting location number": ["reporting location number","reporting location #","reporting location"]
   };
 
-  // ---------- Helpers ----------
   const byId = x => document.getElementById(x);
   const fileInput  = byId('file');
   const previewBtn = byId('preview');
@@ -76,20 +70,20 @@
   const logEl      = byId('log');
 
   const pad = n => String(n).padStart(2,'0');
-
-  // value written into cells (no dots; as requested earlier)
   function cellDateYYYYMMDD(){
     const d = new Date();
     return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
   }
-  // filename parts: YYYY.MM.DD and HH.mm (24h)
   function dateDots(){
     const d = new Date();
     return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())}`;
   }
-  function time24h(){
+  function time24hAmPm(){
     const d = new Date();
-    return `${pad(d.getHours())}.${pad(d.getMinutes())}`;
+    let h = d.getHours();
+    const m = pad(d.getMinutes());
+    const ampm = h >= 12 ? 'pm' : 'am';
+    return `${pad(h)}.${m} ${ampm}`;
   }
 
   function normalize(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g," "); }
@@ -107,116 +101,78 @@
     }
     return map;
   }
-  function log(msg){
-    logEl.style.display = "block";
-    logEl.textContent += msg + "\n";
-  }
 
-  // ---------- State ----------
-  let arrayBuffer = null;
-  let baseName = null;        // filename without .xlsx
-  let wbModified = null;      // workbook with updates applied
-  let proposedName = null;    // final file name
+  let arrayBuffer=null, wbModified=null;
 
-  // ---------- File load ----------
-  fileInput.addEventListener('change', async (e) => {
+  fileInput.addEventListener('change', async (e)=>{
     const f = e.target.files?.[0];
-    if(!f){ previewBtn.disabled = true; downloadBtn.disabled = true; statusEl.textContent = "Waiting for file"; return; }
+    if(!f){ previewBtn.disabled=true; downloadBtn.disabled=true; statusEl.textContent="Waiting for file"; return; }
     arrayBuffer = await f.arrayBuffer();
-    baseName = f.name.replace(/\.xlsx$/i,'') || "updated";
-    statusEl.textContent = `Loaded: ${f.name}`;
-    summaryEl.textContent = "";
-    previewArea.style.display = "none";
-    outnameEl.style.display = "none";
-    wbModified = null;
-    previewBtn.disabled = false;
-    downloadBtn.disabled = true;
-    logEl.textContent = "";
+    statusEl.textContent=`Loaded: ${f.name}`;
+    summaryEl.textContent="";
+    previewArea.style.display="none";
+    outnameEl.style.display="none";
+    wbModified=null;
+    previewBtn.disabled=false;
+    downloadBtn.disabled=true;
   });
 
-  // ---------- Preview (apply updates in-memory, show sample) ----------
-  previewBtn.addEventListener('click', () => {
+  previewBtn.addEventListener('click', ()=>{
     if(!arrayBuffer) return;
 
-    // build proposed name with dotted date + 24h time
-    proposedName = `${baseName} ${dateDots()} ${time24h()}.xlsx`;
-    outnameEl.textContent = proposedName;
-    outnameEl.style.display = "inline-block";
+    const baseName = "ZoroToolsInventoryUpload"; // fixed root name
+    const finalName = `${baseName} ${dateDots()} ${time24hAmPm()}.xlsx`;
+    outnameEl.textContent = finalName;
+    outnameEl.style.display="inline-block";
 
-    statusEl.textContent = "Processing…";
-    const wb = XLSX.read(arrayBuffer, { type: "array" });
-
-    let sheetsTouched = 0, rowsUpdated = 0, colsHit = new Set();
+    const wb = XLSX.read(arrayBuffer,{type:"array"});
     const stamp = cellDateYYYYMMDD();
+    let totalRows=0, sheetsTouched=0, colsHit=new Set();
 
-    wb.SheetNames.forEach(sheetName => {
-      const ws  = wb.Sheets[sheetName];
-      const AOA = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
-      if(!AOA.length) return;
-
-      const headers = AOA[0];
-      const idxMap  = findHeaderIndexes(headers);
-      const targetCols = Object.values(idxMap);
-      if(!targetCols.length) return;
-
-      for (let key in idxMap){ colsHit.add(key); }
-
-      for (let r=1; r<AOA.length; r++){
-        for (const c of targetCols){ AOA[r][c] = stamp; }
-        rowsUpdated++;
+    wb.SheetNames.forEach(name=>{
+      const ws=wb.Sheets[name];
+      const A=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      if(!A.length) return;
+      const idx=findHeaderIndexes(A[0]);
+      const cols=Object.values(idx);
+      if(!cols.length) return;
+      for(const k in idx){colsHit.add(k);}
+      for(let r=1;r<A.length;r++){
+        for(const c of cols){A[r][c]=stamp;}
+        totalRows++;
       }
-
-      // rebuild + force strings for edited cells
-      const newWS = XLSX.utils.aoa_to_sheet(AOA);
-      for (let r=1; r<AOA.length; r++){
-        for (const c of targetCols){
-          const addr = XLSX.utils.encode_cell({r, c});
-          if(newWS[addr]) newWS[addr].t = 's';
+      const newWS=XLSX.utils.aoa_to_sheet(A);
+      for(let r=1;r<A.length;r++){
+        for(const c of cols){
+          const addr=XLSX.utils.encode_cell({r,c});
+          if(newWS[addr]) newWS[addr].t='s';
         }
       }
-      wb.Sheets[sheetName] = newWS;
+      wb.Sheets[name]=newWS;
       sheetsTouched++;
     });
 
-    wbModified = wb;
-    statusEl.textContent = "Preview ready";
-    summaryEl.innerHTML = `Updated <b>${rowsUpdated.toLocaleString()}</b> data row(s) across <b>${sheetsTouched}</b> sheet(s).
-      Columns hit: <span class="badge">${[...colsHit].join(", ") || "none found"}</span><br>
-      Proposed name: <span class="badge">${proposedName}</span>`;
+    wbModified=wb;
+    summaryEl.innerHTML=`Updated <b>${totalRows.toLocaleString()}</b> rows across <b>${sheetsTouched}</b> sheets.<br>Proposed name: <span class="badge">${finalName}</span>`;
+    statusEl.textContent="Preview ready";
+    downloadBtn.disabled=false;
 
-    // Build preview table from first sheet (first 12 rows)
-    const firstSheet = wb.SheetNames[0];
-    const ws0 = wb.Sheets[firstSheet];
-    const A0 = XLSX.utils.sheet_to_json(ws0, { header:1, defval:"" });
-    const maxRows = Math.min(A0.length, 13); // header + 12 rows
-
-    let html = `<div class="divider"></div>
-      <div class="muted">Preview: <b>${firstSheet}</b> — showing first ${Math.max(0,maxRows-1)} row(s)</div>`;
-
-    if (A0.length){
-      const head = A0[0];
-      html += `<table><thead><tr>${
-        head.map(h => `<th>${String(h||"")}</th>`).join("")
-      }</tr></thead><tbody>${
-        A0.slice(1, maxRows).map(row => 
-          `<tr>${head.map((_,i)=>`<td>${String((row||[])[i]??"")}</td>`).join("")}</tr>`
-        ).join("")
-      }</tbody></table>`;
-    } else {
-      html += `<div class="muted">Sheet is empty.</div>`;
-    }
-
-    previewArea.innerHTML = html;
-    previewArea.style.display = "block";
-    downloadBtn.disabled = false;
+    // preview first 12 rows
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const A=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+    const max=Math.min(A.length,13);
+    let html=`<div class="divider"></div><div class="muted">Preview: <b>${wb.SheetNames[0]}</b> — first ${max-1} row(s)</div>`;
+    if(A.length){
+      html+=`<table><thead><tr>${A[0].map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${A.slice(1,max).map(r=>`<tr>${A[0].map((_,i)=>`<td>${r[i]??""}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    } else { html+=`<div class="muted">Sheet empty.</div>`; }
+    previewArea.innerHTML=html;
+    previewArea.style.display="block";
   });
 
-  // ---------- Download ----------
-  downloadBtn.addEventListener('click', () => {
-    if(!wbModified){ alert("Please click Preview first."); return; }
-    // re-evaluate name at click time, so time stays current if they waited
-    proposedName = `${baseName} ${dateDots()} ${time24h()}.xlsx`;
-    XLSX.writeFile(wbModified, proposedName);
+  downloadBtn.addEventListener('click',()=>{
+    if(!wbModified){alert("Preview first.");return;}
+    const name=`ZoroToolsInventoryUpload ${dateDots()} ${time24hAmPm()}.xlsx`;
+    XLSX.writeFile(wbModified,name);
   });
 })();
 </script>
