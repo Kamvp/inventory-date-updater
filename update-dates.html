@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Spreadsheet Date Updater (YYYYMMDD)</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 28px; background:#f8fafc; color:#0f172a; }
+  .card { background:#fff; border-radius:16px; padding:24px; max-width:820px; margin:auto; box-shadow:0 10px 30px rgba(2,6,23,.08); }
+  h1 { font-size:1.25rem; margin:0 0 12px; }
+  p { margin:8px 0 16px; color:#334155; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  input[type=file], input[type=password] { padding:10px; border:1px solid #cbd5e1; border-radius:10px; background:#f1f5f9; }
+  button { padding:10px 16px; border:0; border-radius:12px; cursor:pointer; background:#0ea5e9; color:#fff; font-weight:600; }
+  button[disabled] { opacity:.5; cursor:not-allowed; }
+  .badge { display:inline-block; padding:4px 8px; border-radius:999px; background:#e2e8f0; color:#334155; font-size:.8rem; }
+  .log { background:#0b1020; color:#e2e8f0; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:12px; border-radius:10px; white-space:pre-wrap; font-size:.85rem; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Update Spreadsheet Dates → Today (YYYYMMDD)</h1>
+    <p>This sets these columns (if present) on every sheet to today’s local date (no dashes): 
+      <span class="badge">INVENTORY REFERENCE #</span>, 
+      <span class="badge">AVAILABLE TO SHIP DATE</span>, 
+      <span class="badge">REPORTING LOCATION NUMBER</span>.
+    </p>
+    <div class="row" style="margin-bottom:8px">
+      <input id="access" type="password" placeholder="(Optional) Access key" />
+      <button id="unlock">Unlock</button>
+      <span id="gate" class="badge">No key set</span>
+    </div>
+    <div class="row">
+      <input id="file" type="file" accept=".xlsx" disabled />
+      <button id="go" disabled>Update & Download</button>
+      <span id="status" class="badge">Locked</span>
+    </div>
+    <div id="log" class="log" style="margin-top:14px; display:none;"></div>
+  </div>
+
+<script>
+(function(){
+  // ====== BASIC “SHARED KEY” (optional) ======================================
+  // If you want a simple shared key, set ACCESS_KEY to a non-empty string and publish.
+  // Share that key with your staff. (This is light obfuscation, not strong security.)
+  const ACCESS_KEY = ""; // e.g. "doornmore2025"  -> then the page requires it
+
+  const fileInput = document.getElementById('file');
+  const goBtn = document.getElementById('go');
+  const statusEl = document.getElementById('status');
+  const logEl = document.getElementById('log');
+  const accessEl = document.getElementById('access');
+  const unlockBtn = document.getElementById('unlock');
+  const gateEl = document.getElementById('gate');
+
+  function unlockIfAllowed() {
+    if (!ACCESS_KEY) {
+      gateEl.textContent = "No key required";
+      statusEl.textContent = "Ready";
+      fileInput.disabled = false;
+      goBtn.disabled = true;
+      return;
+    }
+    const ok = accessEl.value === ACCESS_KEY;
+    gateEl.textContent = ok ? "Unlocked" : "Locked";
+    statusEl.textContent = ok ? "Ready" : "Locked";
+    fileInput.disabled = !ok;
+    goBtn.disabled = true;
+  }
+  unlockBtn.addEventListener('click', unlockIfAllowed);
+  unlockIfAllowed();
+
+  // ====== HEADERS WE WILL UPDATE (case-insensitive + aliases) ================
+  const TARGET_HEADERS = {
+    "inventory reference #": ["inventory reference #","inventory ref #","inventory reference number"],
+    "available to ship date": ["available to ship date","avail to ship date","ship available date"],
+    "reporting location number": ["reporting location number","reporting location #","reporting location"]
+  };
+
+  function todayStampYYYYMMDD(){
+    const d = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`; // <-- no dashes
+  }
+  function normalize(s){
+    return String(s || "").trim().toLowerCase().replace(/\s+/g," ");
+  }
+  function findHeaderIndexes(headerRow){
+    // returns a dict of canonical header -> column index (if found)
+    const map = {};
+    const normRow = headerRow.map(h => normalize(h));
+    for (const canonical in TARGET_HEADERS){
+      const variants = TARGET_HEADERS[canonical].map(normalize);
+      let found = -1;
+      for (const v of variants){
+        const i = normRow.indexOf(v);
+        if (i !== -1){ found = i; break; }
+      }
+      if (found !== -1) map[canonical] = found;
+    }
+    return map;
+  }
+  function log(msg){
+    logEl.style.display = "block";
+    logEl.textContent += msg + "\n";
+  }
+
+  let arrayBuffer = null, loadedFileName = null;
+
+  fileInput.addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) { goBtn.disabled = true; return; }
+    loadedFileName = f.name.replace(/\.xlsx$/i, "") || "updated";
+    arrayBuffer = await f.arrayBuffer();
+    statusEl.textContent = `Loaded: ${f.name}`;
+    goBtn.disabled = false;
+    logEl.textContent = "";
+    log(`Ready. File detected: ${f.name}`);
+  });
+
+  goBtn.addEventListener('click', () => {
+    if (!arrayBuffer) return;
+    goBtn.disabled = true;
+    statusEl.textContent = "Processing…";
+    log("Parsing workbook…");
+
+    const wb = XLSX.read(arrayBuffer, { type: "array" });
+    const stamp = todayStampYYYYMMDD();
+    let totalRowsUpdated = 0, totalSheetsTouched = 0;
+
+    wb.SheetNames.forEach(sheetName => {
+      const ws = wb.Sheets[sheetName];
+      const AOA = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      if (!AOA.length) return;
+
+      const headers = AOA[0];
+      const idxMap = findHeaderIndexes(headers);
+      const targetCols = Object.values(idxMap);
+      if (!targetCols.length) return; // nothing to do on this sheet
+
+      let rowsUpdated = 0;
+      for (let r = 1; r < AOA.length; r++){
+        if (!AOA[r]) continue;
+        for (const c of targetCols){
+          AOA[r][c] = stamp;
+        }
+        rowsUpdated++;
+      }
+      totalRowsUpdated += rowsUpdated;
+      if (rowsUpdated > 0) totalSheetsTouched++;
+
+      // rebuild and force string type
+      const newWS = XLSX.utils.aoa_to_sheet(AOA);
+      for (let r = 1; r < AOA.length; r++){
+        for (const c of targetCols){
+          const addr = XLSX.utils.encode_cell({ r, c });
+          if (newWS[addr]) newWS[addr].t = 's';
+        }
+      }
+      wb.Sheets[sheetName] = newWS;
+    });
+
+    const outName = `updated_${loadedFileName}.xlsx`;
+    log(`Set date = ${stamp} on ${totalSheetsTouched} sheet(s); updated ~${totalRowsUpdated} data row(s).`);
+    XLSX.writeFile(wb, outName);
+    statusEl.textContent = "Done";
+    goBtn.disabled = false;
+  });
+})();
+</script>
+</body>
+</html>
