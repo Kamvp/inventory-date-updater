@@ -3,98 +3,97 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Spreadsheet Date Updater (YYYYMMDD)</title>
+<title>Inventory Date Updater (Preview → Download)</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
-  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 28px; background:#f8fafc; color:#0f172a; }
-  .card { background:#fff; border-radius:16px; padding:24px; max-width:820px; margin:auto; box-shadow:0 10px 30px rgba(2,6,23,.08); }
-  h1 { font-size:1.25rem; margin:0 0 12px; }
-  p { margin:8px 0 16px; color:#334155; }
-  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  input[type=file], input[type=password] { padding:10px; border:1px solid #cbd5e1; border-radius:10px; background:#f1f5f9; }
-  button { padding:10px 16px; border:0; border-radius:12px; cursor:pointer; background:#0ea5e9; color:#fff; font-weight:600; }
-  button[disabled] { opacity:.5; cursor:not-allowed; }
-  .badge { display:inline-block; padding:4px 8px; border-radius:999px; background:#e2e8f0; color:#334155; font-size:.8rem; }
-  .log { background:#0b1020; color:#e2e8f0; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding:12px; border-radius:10px; white-space:pre-wrap; font-size:.85rem; }
+  :root { --ink:#0f172a; --sub:#334155; --chip:#e2e8f0; --bg:#f8fafc; --card:#ffffff; --brand:#0ea5e9; }
+  html,body { height:100%; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--ink); }
+  .wrap { max-width:960px; margin:32px auto; padding:0 16px; }
+  .card { background:var(--card); border-radius:16px; padding:24px; box-shadow:0 10px 30px rgba(2,6,23,.08); }
+  h1 { font-size:1.3rem; margin:0 0 10px; }
+  p  { color:var(--sub); margin:0 0 14px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  input[type=file] { padding:10px; border:1px solid #cbd5e1; border-radius:12px; background:#f1f5f9; }
+  button { padding:10px 16px; border:0; border-radius:12px; cursor:pointer; background:var(--brand); color:#fff; font-weight:600; }
+  button.secondary{ background:#0f766e; }
+  button[disabled]{ opacity:.5; cursor:not-allowed; }
+  .badge{ display:inline-block; padding:4px 8px; border-radius:999px; background:var(--chip); color:var(--sub); font-size:.8rem; }
+  .muted{ color:var(--sub); font-size:.9rem; }
+  .log { margin-top:12px; font-family:ui-monospace,Menlo,Consolas,monospace; background:#0b1020; color:#cbd5e1; padding:12px; border-radius:12px; white-space:pre-wrap; font-size:.85rem; display:none; }
+  table { border-collapse:collapse; width:100%; margin-top:10px; }
+  th,td{ border:1px solid #e5e7eb; padding:6px 8px; font-size:.9rem; }
+  th{ background:#f1f5f9; text-align:left; }
+  .divider{ height:1px; background:#e5e7eb; margin:14px 0; }
 </style>
 </head>
 <body>
+<div class="wrap">
   <div class="card">
-    <h1>Update Spreadsheet Dates → Today (YYYYMMDD)</h1>
-    <p>This sets these columns (if present) on every sheet to today’s local date (no dashes): 
+    <h1>Inventory Date Updater — Preview, then Download</h1>
+    <p>Sets these columns (if present, across all sheets) to today’s local date in <b>YYYYMMDD</b>: 
       <span class="badge">INVENTORY REFERENCE #</span>, 
       <span class="badge">AVAILABLE TO SHIP DATE</span>, 
       <span class="badge">REPORTING LOCATION NUMBER</span>.
     </p>
-    <div class="row" style="margin-bottom:8px">
-      <input id="access" type="password" placeholder="(Optional) Access key" />
-      <button id="unlock">Unlock</button>
-      <span id="gate" class="badge">No key set</span>
+
+    <div class="row" style="margin-top:8px">
+      <input id="file" type="file" accept=".xlsx" />
+      <button id="preview" disabled>Preview updates</button>
+      <span id="status" class="badge">Waiting for file</span>
     </div>
-    <div class="row">
-      <input id="file" type="file" accept=".xlsx" disabled />
-      <button id="go" disabled>Update & Download</button>
-      <span id="status" class="badge">Locked</span>
+
+    <div id="summary" class="muted" style="margin-top:10px;"></div>
+    <div id="previewArea" style="margin-top:12px; display:none;"></div>
+
+    <div class="row" style="margin-top:10px">
+      <button id="download" class="secondary" disabled>Download Updated .xlsx</button>
+      <span id="outname" class="badge" title="Proposed download name" style="display:none;"></span>
     </div>
-    <div id="log" class="log" style="margin-top:14px; display:none;"></div>
+
+    <div id="log" class="log"></div>
   </div>
+</div>
 
 <script>
 (function(){
-  // ====== BASIC “SHARED KEY” (optional) ======================================
-  // If you want a simple shared key, set ACCESS_KEY to a non-empty string and publish.
-  // Share that key with your staff. (This is light obfuscation, not strong security.)
-  const ACCESS_KEY = ""; // e.g. "doornmore2025"  -> then the page requires it
-
-  const fileInput = document.getElementById('file');
-  const goBtn = document.getElementById('go');
-  const statusEl = document.getElementById('status');
-  const logEl = document.getElementById('log');
-  const accessEl = document.getElementById('access');
-  const unlockBtn = document.getElementById('unlock');
-  const gateEl = document.getElementById('gate');
-
-  function unlockIfAllowed() {
-    if (!ACCESS_KEY) {
-      gateEl.textContent = "No key required";
-      statusEl.textContent = "Ready";
-      fileInput.disabled = false;
-      goBtn.disabled = true;
-      return;
-    }
-    const ok = accessEl.value === ACCESS_KEY;
-    gateEl.textContent = ok ? "Unlocked" : "Locked";
-    statusEl.textContent = ok ? "Ready" : "Locked";
-    fileInput.disabled = !ok;
-    goBtn.disabled = true;
-  }
-  unlockBtn.addEventListener('click', unlockIfAllowed);
-  unlockIfAllowed();
-
-  // ====== HEADERS WE WILL UPDATE (case-insensitive + aliases) ================
+  // ---------- Config: header aliases (case-insensitive) ----------
   const TARGET_HEADERS = {
     "inventory reference #": ["inventory reference #","inventory ref #","inventory reference number"],
     "available to ship date": ["available to ship date","avail to ship date","ship available date"],
     "reporting location number": ["reporting location number","reporting location #","reporting location"]
   };
 
-  function todayStampYYYYMMDD(){
+  // ---------- Helpers ----------
+  const byId = x => document.getElementById(x);
+  const fileInput  = byId('file');
+  const previewBtn = byId('preview');
+  const downloadBtn= byId('download');
+  const statusEl   = byId('status');
+  const summaryEl  = byId('summary');
+  const previewArea= byId('previewArea');
+  const outnameEl  = byId('outname');
+  const logEl      = byId('log');
+
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function todayYYYYMMDD(){
     const d = new Date();
-    const pad = n => String(n).padStart(2,'0');
-    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`; // <-- no dashes
+    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
   }
-  function normalize(s){
-    return String(s || "").trim().toLowerCase().replace(/\s+/g," ");
+  function timeHHmmAmPm(){
+    const d = new Date();
+    const h = d.getHours(); // 00–23
+    return `${pad(h)}.${pad(d.getMinutes())}${h>=12?'pm':'am'}`; // e.g., 14.28pm
   }
+  function normalize(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g," "); }
   function findHeaderIndexes(headerRow){
-    // returns a dict of canonical header -> column index (if found)
     const map = {};
-    const normRow = headerRow.map(h => normalize(h));
+    const NR = headerRow.map(h => normalize(h));
     for (const canonical in TARGET_HEADERS){
-      const variants = TARGET_HEADERS[canonical].map(normalize);
+      const vars = TARGET_HEADERS[canonical].map(normalize);
       let found = -1;
-      for (const v of variants){
-        const i = normRow.indexOf(v);
+      for (const v of vars){
+        const i = NR.indexOf(v);
         if (i !== -1){ found = i; break; }
       }
       if (found !== -1) map[canonical] = found;
@@ -106,66 +105,110 @@
     logEl.textContent += msg + "\n";
   }
 
-  let arrayBuffer = null, loadedFileName = null;
+  // ---------- State ----------
+  let arrayBuffer = null;
+  let baseName = null;        // filename without .xlsx
+  let wbModified = null;      // workbook with updates applied
+  let proposedName = null;    // final file name
 
+  // ---------- File load ----------
   fileInput.addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
-    if (!f) { goBtn.disabled = true; return; }
-    loadedFileName = f.name.replace(/\.xlsx$/i, "") || "updated";
+    if(!f){ previewBtn.disabled = true; downloadBtn.disabled = true; statusEl.textContent = "Waiting for file"; return; }
     arrayBuffer = await f.arrayBuffer();
+    baseName = f.name.replace(/\.xlsx$/i,'') || "updated";
     statusEl.textContent = `Loaded: ${f.name}`;
-    goBtn.disabled = false;
+    summaryEl.textContent = "";
+    previewArea.style.display = "none";
+    outnameEl.style.display = "none";
+    wbModified = null;
+    previewBtn.disabled = false;
+    downloadBtn.disabled = true;
     logEl.textContent = "";
-    log(`Ready. File detected: ${f.name}`);
   });
 
-  goBtn.addEventListener('click', () => {
-    if (!arrayBuffer) return;
-    goBtn.disabled = true;
-    statusEl.textContent = "Processing…";
-    log("Parsing workbook…");
+  // ---------- Preview (apply updates in-memory, show sample) ----------
+  previewBtn.addEventListener('click', () => {
+    if(!arrayBuffer) return;
 
+    const stamp = todayYYYYMMDD();
+    const time  = timeHHmmAmPm();
+    proposedName = `${baseName} ${stamp} ${time}.xlsx`;
+    outnameEl.textContent = proposedName;
+    outnameEl.style.display = "inline-block";
+
+    statusEl.textContent = "Processing…";
     const wb = XLSX.read(arrayBuffer, { type: "array" });
-    const stamp = todayStampYYYYMMDD();
-    let totalRowsUpdated = 0, totalSheetsTouched = 0;
+
+    let sheetsTouched = 0, rowsUpdated = 0, colsHit = new Set();
 
     wb.SheetNames.forEach(sheetName => {
-      const ws = wb.Sheets[sheetName];
-      const AOA = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      if (!AOA.length) return;
+      const ws  = wb.Sheets[sheetName];
+      const AOA = XLSX.utils.sheet_to_json(ws, { header:1, defval:"" });
+      if(!AOA.length) return;
 
       const headers = AOA[0];
-      const idxMap = findHeaderIndexes(headers);
+      const idxMap  = findHeaderIndexes(headers);
       const targetCols = Object.values(idxMap);
-      if (!targetCols.length) return; // nothing to do on this sheet
+      if(!targetCols.length) return;
 
-      let rowsUpdated = 0;
-      for (let r = 1; r < AOA.length; r++){
-        if (!AOA[r]) continue;
-        for (const c of targetCols){
-          AOA[r][c] = stamp;
-        }
+      for (let key in idxMap){ colsHit.add(key); }
+
+      for (let r=1; r<AOA.length; r++){
+        for (const c of targetCols){ AOA[r][c] = stamp; }
         rowsUpdated++;
       }
-      totalRowsUpdated += rowsUpdated;
-      if (rowsUpdated > 0) totalSheetsTouched++;
 
-      // rebuild and force string type
+      // rebuild + force strings for edited cells
       const newWS = XLSX.utils.aoa_to_sheet(AOA);
-      for (let r = 1; r < AOA.length; r++){
+      for (let r=1; r<AOA.length; r++){
         for (const c of targetCols){
-          const addr = XLSX.utils.encode_cell({ r, c });
-          if (newWS[addr]) newWS[addr].t = 's';
+          const addr = XLSX.utils.encode_cell({r, c});
+          if(newWS[addr]) newWS[addr].t = 's';
         }
       }
       wb.Sheets[sheetName] = newWS;
+      sheetsTouched++;
     });
 
-    const outName = `updated_${loadedFileName}.xlsx`;
-    log(`Set date = ${stamp} on ${totalSheetsTouched} sheet(s); updated ~${totalRowsUpdated} data row(s).`);
-    XLSX.writeFile(wb, outName);
-    statusEl.textContent = "Done";
-    goBtn.disabled = false;
+    wbModified = wb;
+    statusEl.textContent = "Preview ready";
+    summaryEl.innerHTML = `Updated <b>${rowsUpdated.toLocaleString()}</b> data row(s) across <b>${sheetsTouched}</b> sheet(s).
+      Columns hit: <span class="badge">${[...colsHit].join(", ") || "none found"}</span><br>
+      Proposed name: <span class="badge">${proposedName}</span>`;
+
+    // Build preview table from first sheet (first 12 rows)
+    const firstSheet = wb.SheetNames[0];
+    const ws0 = wb.Sheets[firstSheet];
+    const A0 = XLSX.utils.sheet_to_json(ws0, { header:1, defval:"" });
+    const maxRows = Math.min(A0.length, 13); // header + 12 rows
+
+    let html = `<div class="divider"></div>
+      <div class="muted">Preview: <b>${firstSheet}</b> — showing first ${maxRows-1 < 0 ? 0 : maxRows-1} row(s)</div>`;
+
+    if (A0.length){
+      const head = A0[0];
+      html += `<table><thead><tr>${
+        head.map(h => `<th>${String(h||"")}</th>`).join("")
+      }</tr></thead><tbody>${
+        A0.slice(1, maxRows).map(row => 
+          `<tr>${head.map((_,i)=>`<td>${String((row||[])[i]??"")}</td>`).join("")}</tr>`
+        ).join("")
+      }</tbody></table>`;
+    } else {
+      html += `<div class="muted">Sheet is empty.</div>`;
+    }
+
+    previewArea.innerHTML = html;
+    previewArea.style.display = "block";
+    downloadBtn.disabled = false;
+  });
+
+  // ---------- Download ----------
+  downloadBtn.addEventListener('click', () => {
+    if(!wbModified){ alert("Please click Preview first."); return; }
+    if(!proposedName){ proposedName = `${baseName} ${todayYYYYMMDD()} ${timeHHmmAmPm()}.xlsx`; }
+    XLSX.writeFile(wbModified, proposedName);
   });
 })();
 </script>
